@@ -1,14 +1,5 @@
 using System.Collections.Concurrent;
-
-// Model for a Note
-public record Note
-{
-    public Guid Id { get; init; }
-    public string Title { get; init; } = string.Empty;
-    public string Content { get; init; } = string.Empty;
-    public DateTime CreatedAt { get; init; }
-    public DateTime UpdatedAt { get; init; }
-}
+using NotesApi.Models;
 
 // In-memory storage
 // Using ConcurrentDictionary for thread-safety in real apps
@@ -21,8 +12,8 @@ lock (lockObj)
 {
     notes.AddRange(new[]
     {
-        new Note { Id = Guid.NewGuid(), Title = "Welcome", Content = "This is your first note", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
-        new Note { Id = Guid.NewGuid(), Title = "Pagination", Content = "Why pagination matters...", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow }
+        new Note { Id = Guid.NewGuid(), Title = "Welcome", Description = "This is your first note", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+        new Note { Id = Guid.NewGuid(), Title = "Pagination", Description = "Why pagination matters...", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow }
     });
 }
 
@@ -77,22 +68,66 @@ app.MapGet("/notes", (int? page, int? limit) =>
     return Results.Ok(response);
 });
 
-// POST /notes - create a new note
+// POST /notes - create a new note WITH VALIDATION
+// Why validation matters:
+// 1. Security: Prevents malicious payloads, injection attacks, oversized data causing DoS
+// 2. Data integrity: Ensures consistent, usable data in your store
+// 3. UX: Gives clear, actionable feedback instead of generic 500 errors
+// 4. API contract: Documents what clients can send
+//
+// BAD error message example (without proper validation):
+//   return Results.BadRequest(new { error = "Invalid data" }); // vague, client can't fix
+//   or worse: unhandled exception -> 500 Internal Server Error
+//
+// GOOD error message example (with validation):
+//   Return 400 with specific field errors so client knows exactly what to fix
+//
+// Difference: Request without validation vs with validation
+// WITHOUT validation: server trusts client, may crash or store garbage data
+//     POST /notes { "title": "ab" } -> stores "ab" -> breaks UI assumptions
+// WITH validation: server rejects bad data early with clear messages
+//     POST /notes { "title": "ab" } -> 400 { error: "Validation failed", details: ["Title must be at least 3 characters"] }
 app.MapPost("/notes", (NoteCreateDto dto) =>
 {
-    // Edge cases: empty title/content, too long
-    if (string.IsNullOrWhiteSpace(dto.Title))
-        return Results.BadRequest(new { error = "Title is required" });
-    if (string.IsNullOrWhiteSpace(dto.Content))
-        return Results.BadRequest(new { error = "Content is required" });
-    if (dto.Title.Length > 200)
-        return Results.BadRequest(new { error = "Title too long (max 200)" });
+    // Phase 2: Input validation with detailed error messages
+    // Requirements: title required min 3 chars, description optional max 500 chars
+    var errors = new List<string>();
+    
+    var title = dto.Title?.Trim();
+    if (string.IsNullOrWhiteSpace(title))
+    {
+        errors.Add("Title is required");
+    }
+    else
+    {
+        if (title.Length < 3)
+            errors.Add("Title must be at least 3 characters");
+        if (title.Length > 200)
+            errors.Add("Title too long (max 200 characters)");
+    }
+
+    var description = dto.Description?.Trim();
+    if (!string.IsNullOrEmpty(description) && description.Length > 500)
+    {
+        errors.Add("Description too long (max 500 characters)");
+    }
+
+    // If validation fails, return structured error
+    if (errors.Count > 0)
+    {
+        // Good error message: specific, actionable, machine-readable
+        return Results.BadRequest(new { 
+            error = "Validation failed", 
+            details = errors,
+            received = new { title = dto.Title, description = dto.Description }
+        });
+    }
 
     var note = new Note
     {
         Id = Guid.NewGuid(),
-        Title = dto.Title.Trim(),
-        Content = dto.Content.Trim(),
+        Title = title!,
+        Description = string.IsNullOrWhiteSpace(description) ? null : description,
         CreatedAt = DateTime.UtcNow,
         UpdatedAt = DateTime.UtcNow
     };
@@ -143,7 +178,5 @@ app.MapDelete("/notes/{id:guid}", (Guid id) =>
 
     return Results.NoContent();
 });
-
-record NoteCreateDto(string Title, string Content);
 
 app.Run();

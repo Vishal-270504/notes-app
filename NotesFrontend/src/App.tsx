@@ -1,5 +1,17 @@
 import { useEffect, useState } from 'react';
+import { z } from 'zod';
 import { Note, fetchNotes, createNote, deleteNote } from './api';
+
+// Phase 2: Input validation using Zod
+// Why client-side validation matters:
+// 1. Immediate feedback without network roundtrip
+// 2. Reduces server load
+// 3. Better UX
+// Server validation is still required - never trust client!
+const noteSchema = z.object({
+  title: z.string().trim().min(3, 'Title must be at least 3 characters').max(200, 'Title too long (max 200)'),
+  description: z.string().trim().max(500, 'Description too long (max 500 characters)').optional().or(z.literal(''))
+});
 
 function App() {
   const [notes, setNotes] = useState<Note[]>([]);
@@ -9,7 +21,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
+  const [description, setDescription] = useState('');
 
   const loadNotes = async (pageNum: number) => {
     setLoading(true);
@@ -32,16 +44,26 @@ function App() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !content.trim()) {
-      setError('Title and content are required');
+    setError(null);
+    
+    // Client-side validation with Zod
+    // Good error message: specific field errors before hitting server
+    const parseResult = noteSchema.safeParse({ title, description });
+    if (!parseResult.success) {
+      // Zod gives structured errors
+      const messages = parseResult.error.issues.map(i => i.message).join(', ');
+      setError(`Validation error: ${messages}`);
       return;
     }
+
     try {
-      await createNote(title, content);
+      await createNote(parseResult.data.title, parseResult.data.description || undefined);
       setTitle('');
-      setContent('');
+      setDescription('');
       loadNotes(page);
     } catch (e: any) {
+      // Bad error message example: generic server error
+      // Good error message: server returns details array
       setError(e.message || 'Failed to create note');
     }
   };
@@ -62,15 +84,15 @@ function App() {
 
       <form onSubmit={handleCreate} style={{ marginBottom: 20 }}>
         <input
-          placeholder="Title"
+          placeholder="Title (min 3 chars)"
           value={title}
           onChange={e => setTitle(e.target.value)}
           style={{ width: '100%', marginBottom: 8, padding: 8 }}
         />
         <textarea
-          placeholder="Content"
-          value={content}
-          onChange={e => setContent(e.target.value)}
+          placeholder="Description (optional, max 500 chars)"
+          value={description}
+          onChange={e => setDescription(e.target.value)}
           style={{ width: '100%', marginBottom: 8, padding: 8, minHeight: 80 }}
         />
         <button type="submit" style={{ padding: '8px 16px' }}>Create Note</button>
@@ -83,7 +105,7 @@ function App() {
         {notes.map(n => (
           <li key={n.id} style={{ border: '1px solid #ccc', padding: 12, marginBottom: 10, borderRadius: 6 }}>
             <h3>{n.title}</h3>
-            <p>{n.content}</p>
+            <p>{n.description || <em>No description</em>}</p>
             <small>{new Date(n.createdAt).toLocaleString()}</small>
             <br />
             <button onClick={() => handleDelete(n.id)} style={{ marginTop: 8, color: 'red' }}>Delete</button>

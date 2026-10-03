@@ -1,7 +1,7 @@
 export interface Note {
   id: string;
   title: string;
-  content: string;
+  description?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -24,11 +24,11 @@ export async function fetchNotes(page = 1, limit = 10): Promise<PagedResponse> {
   return res.json();
 }
 
-export async function createNote(title: string, content: string): Promise<Note> {
+export async function createNote(title: string, description?: string): Promise<Note> {
   const res = await fetch(`${BASE_URL}/notes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, content })
+    body: JSON.stringify({ title, description })
   });
   if (!res.ok) {
     const err = await res.json();

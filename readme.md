@@ -1,4 +1,7 @@
-# Notes API - Beginner Friendly Plan
+# Notes App - Beginner Friendly Plan
+
+> Repo renamed from `notes-api-pagination` to `notes-app` for clarity.
+Phase 2 / Video Two Learning: Input Validation
 
 ## Architecture
 Backend: ASP.NET Core Minimal API (.NET 8)
@@ -13,9 +16,17 @@ GET /notes?page=1&limit=10
 - Response includes metadata
 
 POST /notes
-- Body: { title, content }
-- Validates required fields
-- Returns 201 Created
+- Body: { title, description? }
+- Title required, min 3 chars, max 200
+- Description optional, max 500 chars
+- Returns 201 Created or 400 Validation failed with details
+
+GET /notes/{id}
+- GUID validation via route constraint
+- Returns 404 if not found
+
+DELETE /notes/{id}
+- Returns 204 on success, 404 if not found
 
 GET /notes/{id}
 - GUID validation via route constraint
@@ -35,9 +46,12 @@ Backend:
    - Page beyond totalPages => returns empty array
 
 2. Create:
-   - Empty/whitespace title/content => 400 Bad Request
+   - Empty/whitespace title => 400 Bad Request
+   - Title <3 chars => 400 Bad Request
    - Title too long >200 => 400
+   - Description >500 chars => 400 Bad Request
    - Trim whitespace
+   - Returns structured error: { error: "Validation failed", details: [...] }
 
 3. Get by ID:
    - Invalid GUID format => 404 via route constraint
@@ -53,13 +67,134 @@ Backend:
 Frontend:
 1. Network errors => show error message
 2. Empty notes list => show empty state
-3. Invalid user input => prevent submit, show error
+3. Invalid user input => Zod client validation prevents submit, shows specific field errors
+4. Server validation still enforced - never trust client
 4. Pagination controls disabled at boundaries
 5. Delete confirmation dialog
 6. Loading state prevents duplicate requests
 7. API base URL configurable
 
-## Why Pagination Matters
+## Phase 1 - Why Pagination Matters
+Without pagination:
+- GET /notes returns all notes at once
+- With 10,000 notes: ~5MB JSON, slow download, high memory, UI freeze
+- Mobile users suffer
+- Server spends CPU serializing huge list
+
+With pagination:
+- Only 10 items per request
+- Fast response, small payload
+- Scalable to millions of notes
+- Better UX with page controls
+
+## Phase 2 - Input Validation Learning
+
+### Why Validation Matters
+1. **Security**: Prevents injection, oversized payloads, DoS attacks, malformed data reaching business logic
+2. **Data Integrity**: Ensures database/store only contains valid, consistent data
+3. **User Experience**: Clear, actionable errors instead of generic 500s
+4. **API Contract**: Documents expectations for consumers
+5. **Cost**: Catches bad data early, cheaper than fixing corrupted data later
+
+### Bad Error Message vs Good Error Message
+
+**Without validation (BAD):**
+```http
+POST /notes
+{ "title": "ab" }
+```
+Response: 500 Internal Server Error
+Body: { "error": "Object reference not set to an instance of an object" }
+→ Client has no idea what went wrong, can't fix it
+
+**With validation (GOOD - Server):**
+```http
+POST /notes
+{ "title": "ab" }
+```
+Response: 400 Bad Request
+Body: {
+  "error": "Validation failed",
+  "details": ["Title must be at least 3 characters"],
+  "received": { "title": "ab", "description": null }
+}
+→ Client knows exactly what to fix
+
+**With validation (GOOD - Client with Zod):**
+Immediate feedback before network request:
+`Validation error: Title must be at least 3 characters`
+→ No roundtrip, instant UX
+
+### Request Without Validation vs With Validation
+
+**Without validation:**
+- Server trusts client input
+- Empty title stored → UI breaks
+- 1000 char description stored → DB bloat, performance hit
+- Unexpected type causes unhandled exception → 500 error
+- Hard to debug
+
+**With validation (Backend + Frontend):**
+- **Frontend Zod**: Catches errors instantly, user-friendly messages
+- **Backend C#**: Final gatekeeper, returns 400 with details
+- Edge cases handled: whitespace, min/max length, optional fields
+- Thread-safe storage with lock
+- Clear API contract
+
+### Validation Libraries Used
+- **Backend**: Manual validation in Minimal API with structured error response
+  - Could also use FluentValidation, DataAnnotations
+- **Frontend**: Zod schema for type-safe parsing
+  - `z.string().min(3).max(200)`
+  - `z.string().max(500).optional()`
+
+### Edge Cases Handled in Phase 2
+Backend:
+- Title null/whitespace → "Title is required"
+- Title <3 chars → "Title must be at least 3 characters"
+- Title >200 → "Title too long (max 200 characters)"
+- Description >500 → "Description too long (max 500 characters)"
+- Multiple errors returned together
+- Trim whitespace before validation/storage
+
+Frontend:
+- Zod validates before submit
+- Empty description allowed
+- Shows first error per field
+- Server errors still displayed if bypassed
+
+### Example Requests
+
+Valid:
+```json
+POST /notes
+{
+  "title": "Meeting Notes",
+  "description": "Discuss project timeline"
+}
+→ 201 Created
+```
+
+Invalid - title too short:
+```json
+POST /notes
+{
+  "title": "Hi",
+  "description": "..."
+}
+→ 400 { "error":"Validation failed", "details":["Title must be at least 3 characters"] }
+```
+
+Invalid - description too long:
+```json
+POST /notes
+{
+  "title": "Valid Title",
+  "description": "a".repeat(501)
+}
+→ 400 { "error":"Validation failed", "details":["Description too long (max 500 characters)"] }
+```
+
 Without pagination:
 - GET /notes returns all notes at once
 - With 10,000 notes: ~5MB JSON, slow download, high memory, UI freeze
@@ -75,11 +210,13 @@ With pagination:
 ## Running the Project
 
 Backend:
-dotnet run --project C:/Users/Desktop/NotesApi
+cd notes-app/NotesApi
+dotnet run
 API runs on http://localhost:5000
+Swagger at http://localhost:5000/swagger
 
 Frontend:
-cd C:/Users/Desktop/NotesFrontend
+cd notes-app/NotesFrontend
 npm install
 npm run dev
 Open http://localhost:5173
