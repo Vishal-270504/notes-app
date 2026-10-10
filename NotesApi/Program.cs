@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using NotesApi.Models;
+using Microsoft.AspNetCore.RateLimiting;
 
 // In-memory storage
 // Using ConcurrentDictionary for thread-safety in real apps
@@ -20,13 +21,43 @@ lock (lockObj)
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+// Rate limiting: 10 requests / minute per IP for all /notes routes
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("NotesPolicy", opt =>
+    {
+        opt.PermitLimit = 10;               // max requests
+        opt.Window = TimeSpan.FromMinutes(1); // per minute
+        opt.QueueLimit = 0;
+    });
+    options.OnRejected = async (ctx, token) =>
+    {
+        ctx.HttpContext.Response.StatusCode = 429;
+        await ctx.HttpContext.Response.WriteAsJsonAsync(new { error = "Too Many Requests", message = "Rate limit exceeded: 10 requests per minute per IP on /notes" });
+    };
+});
+
+// CORS: allow the Vite dev server to call this API from the browser
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+        policy.WithOrigins("http://localhost:5173")
+              .AllowAnyHeader()
+              .AllowAnyMethod());
+});
 
 var app = builder.Build();
+
+app.UseRateLimiter();
+app.UseCors();
 
 app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapGet("/", () => Results.Redirect("/swagger"));
+
+// Group /notes endpoints under rate limit policy
+var notesGroup = app.MapGroup("/notes").RequireRateLimiting("NotesPolicy");
 
 // GET /notes - returns all notes with pagination
 // Why pagination matters:
@@ -36,7 +67,7 @@ app.MapGet("/", () => Results.Redirect("/swagger"));
 // 2. High memory usage on server and client
 // 3. Browser/app may freeze or crash
 // Pagination limits data per request, making API fast and scalable.
-app.MapGet("/notes", (int? page, int? limit) =>
+notesGroup.MapGet("", (int? page, int? limit) =>
 {
     // Edge case handling
     int pageNumber = page.GetValueOrDefault(1);
@@ -87,7 +118,7 @@ app.MapGet("/notes", (int? page, int? limit) =>
 //     POST /notes { "title": "ab" } -> stores "ab" -> breaks UI assumptions
 // WITH validation: server rejects bad data early with clear messages
 //     POST /notes { "title": "ab" } -> 400 { error: "Validation failed", details: ["Title must be at least 3 characters"] }
-app.MapPost("/notes", (NoteCreateDto dto) =>
+notesGroup.MapPost("", (NoteCreateDto dto) =>
 {
     // Phase 2: Input validation with detailed error messages
     // Requirements: title required min 3 chars, description optional max 500 chars
@@ -141,7 +172,7 @@ app.MapPost("/notes", (NoteCreateDto dto) =>
 });
 
 // GET /notes/{id} - get a single note
-app.MapGet("/notes/{id:guid}", (Guid id) =>
+notesGroup.MapGet("/{id:guid}", (Guid id) =>
 {
     Note? note;
     lock (lockObj)
@@ -156,7 +187,7 @@ app.MapGet("/notes/{id:guid}", (Guid id) =>
 });
 
 // DELETE /notes/{id} - delete a note
-app.MapDelete("/notes/{id:guid}", (Guid id) =>
+notesGroup.MapDelete("/{id:guid}", (Guid id) =>
 {
     bool removed;
     lock (lockObj)

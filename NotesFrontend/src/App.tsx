@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { z } from 'zod';
 import { Note, fetchNotes, createNote, deleteNote } from './api';
 
