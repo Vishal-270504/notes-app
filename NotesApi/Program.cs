@@ -1,14 +1,11 @@
-using System.Collections.Concurrent;
 using NotesApi.Models;
+using NotesApi.Middleware;
 using Microsoft.AspNetCore.RateLimiting;
 
 // In-memory storage
-// Using ConcurrentDictionary for thread-safety in real apps
-// For beginner simplicity, we use a List with lock
 var notes = new List<Note>();
 var lockObj = new object();
 
-// Seed some data for testing
 lock (lockObj)
 {
     notes.AddRange(new[]
@@ -21,13 +18,13 @@ lock (lockObj)
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-// Rate limiting: 10 requests / minute per IP for all /notes routes
+
 builder.Services.AddRateLimiter(options =>
 {
     options.AddFixedWindowLimiter("NotesPolicy", opt =>
     {
-        opt.PermitLimit = 10;               // max requests
-        opt.Window = TimeSpan.FromMinutes(1); // per minute
+        opt.PermitLimit = 10;
+        opt.Window = TimeSpan.FromMinutes(1);
         opt.QueueLimit = 0;
     });
     options.OnRejected = async (ctx, token) =>
@@ -37,7 +34,6 @@ builder.Services.AddRateLimiter(options =>
     };
 });
 
-// CORS: allow the Vite dev server to call this API from the browser
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -48,6 +44,7 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseRateLimiter();
 app.UseCors();
 
@@ -56,102 +53,52 @@ app.UseSwaggerUI();
 
 app.MapGet("/", () => Results.Redirect("/swagger"));
 
-// Group /notes endpoints under rate limit policy
 var notesGroup = app.MapGroup("/notes").RequireRateLimiting("NotesPolicy");
 
-// GET /notes - returns all notes with pagination
-// Why pagination matters:
-// Without pagination, if you have 10,000 notes, the API returns ALL of them at once.
-// This causes:
-// 1. Slow response time - large JSON payload
-// 2. High memory usage on server and client
-// 3. Browser/app may freeze or crash
-// Pagination limits data per request, making API fast and scalable.
+// GET /notes with pagination
 notesGroup.MapGet("", (int? page, int? limit) =>
 {
-    // Edge case handling
     int pageNumber = page.GetValueOrDefault(1);
     int pageSize = limit.GetValueOrDefault(10);
-
     if (pageNumber < 1) pageNumber = 1;
     if (pageSize < 1) pageSize = 10;
-    if (pageSize > 100) pageSize = 100; // max limit to prevent abuse
+    if (pageSize > 100) pageSize = 100;
 
     List<Note> snapshot;
-    lock (lockObj)
-    {
-        snapshot = notes.OrderByDescending(n => n.CreatedAt).ToList();
-    }
+    lock (lockObj) { snapshot = notes.OrderByDescending(n => n.CreatedAt).ToList(); }
 
     int total = snapshot.Count;
     int totalPages = (int)Math.Ceiling(total / (double)pageSize);
     var pagedNotes = snapshot.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
 
-    var response = new
-    {
-        page = pageNumber,
-        limit = pageSize,
-        total,
-        totalPages,
-        notes = pagedNotes
-    };
-
-    return Results.Ok(response);
+    return Results.Ok(new { page = pageNumber, limit = pageSize, total, totalPages, notes = pagedNotes });
 });
 
-// POST /notes - create a new note WITH VALIDATION
-// Why validation matters:
-// 1. Security: Prevents malicious payloads, injection attacks, oversized data causing DoS
-// 2. Data integrity: Ensures consistent, usable data in your store
-// 3. UX: Gives clear, actionable feedback instead of generic 500 errors
-// 4. API contract: Documents what clients can send
-//
-// BAD error message example (without proper validation):
-//   return Results.BadRequest(new { error = "Invalid data" }); // vague, client can't fix
-//   or worse: unhandled exception -> 500 Internal Server Error
-//
-// GOOD error message example (with validation):
-//   Return 400 with specific field errors so client knows exactly what to fix
-//
-// Difference: Request without validation vs with validation
-// WITHOUT validation: server trusts client, may crash or store garbage data
-//     POST /notes { "title": "ab" } -> stores "ab" -> breaks UI assumptions
-// WITH validation: server rejects bad data early with clear messages
-//     POST /notes { "title": "ab" } -> 400 { error: "Validation failed", details: ["Title must be at least 3 characters"] }
-notesGroup.MapPost("", (NoteCreateDto dto) =>
+// POST /notes with validation
+notesGroup.MapPost("", (HttpContext httpContext, NoteCreateDto dto) =>
 {
-    // Phase 2: Input validation with detailed error messages
-    // Requirements: title required min 3 chars, description optional max 500 chars
+    var traceId = httpContext.Items["TraceId"]?.ToString() ?? Guid.NewGuid().ToString();
     var errors = new List<string>();
-    
     var title = dto.Title?.Trim();
+
     if (string.IsNullOrWhiteSpace(title))
-    {
         errors.Add("Title is required");
-    }
     else
     {
-        if (title.Length < 3)
-            errors.Add("Title must be at least 3 characters");
-        if (title.Length > 200)
-            errors.Add("Title too long (max 200 characters)");
+        if (title.Length < 3) errors.Add("Title must be at least 3 characters");
+        if (title.Length > 200) errors.Add("Title too long (max 200 characters)");
     }
 
     var description = dto.Description?.Trim();
     if (!string.IsNullOrEmpty(description) && description.Length > 500)
-    {
         errors.Add("Description too long (max 500 characters)");
-    }
 
-    // If validation fails, return structured error
     if (errors.Count > 0)
     {
-        // Good error message: specific, actionable, machine-readable
-        return Results.BadRequest(new { 
-            error = "Validation failed", 
-            details = errors,
-            received = new { title = dto.Title, description = dto.Description }
-        });
+        // 400 Bad Request: client sent invalid data
+        // Why 400 exists: client error, request can be fixed by client without server changes
+        var message = string.Join("; ", errors);
+        return Results.BadRequest(new ErrorResponse(400, "ValidationError", message, traceId));
     }
 
     var note = new Note
@@ -163,50 +110,44 @@ notesGroup.MapPost("", (NoteCreateDto dto) =>
         UpdatedAt = DateTime.UtcNow
     };
 
-    lock (lockObj)
-    {
-        notes.Add(note);
-    }
-
+    lock (lockObj) { notes.Add(note); }
     return Results.Created($"/notes/{note.Id}", note);
 });
 
-// GET /notes/{id} - get a single note
-notesGroup.MapGet("/{id:guid}", (Guid id) =>
+// GET /notes/{id}
+notesGroup.MapGet("/{id:guid}", (HttpContext httpContext, Guid id) =>
 {
+    var traceId = httpContext.Items["TraceId"]?.ToString() ?? Guid.NewGuid().ToString();
     Note? note;
-    lock (lockObj)
-    {
-        note = notes.FirstOrDefault(n => n.Id == id);
-    }
+    lock (lockObj) { note = notes.FirstOrDefault(n => n.Id == id); }
 
     if (note == null)
-        return Results.NotFound(new { error = $"Note with id {id} not found" });
-
+    {
+        // 404 Not Found: resource does not exist
+        // Why 404 exists: client requested a resource that isn't present; correct id needed
+        return Results.NotFound(new ErrorResponse(404, "NotFound", $"Note with id {id} not found", traceId));
+    }
     return Results.Ok(note);
 });
 
-// DELETE /notes/{id} - delete a note
-notesGroup.MapDelete("/{id:guid}", (Guid id) =>
+// DELETE /notes/{id}
+notesGroup.MapDelete("/{id:guid}", (HttpContext httpContext, Guid id) =>
 {
+    var traceId = httpContext.Items["TraceId"]?.ToString() ?? Guid.NewGuid().ToString();
     bool removed;
     lock (lockObj)
     {
         var note = notes.FirstOrDefault(n => n.Id == id);
-        if (note == null)
-        {
-            removed = false;
-        }
-        else
-        {
-            notes.Remove(note);
-            removed = true;
-        }
+        if (note == null) removed = false;
+        else { notes.Remove(note); removed = true; }
     }
 
     if (!removed)
-        return Results.NotFound(new { error = $"Note with id {id} not found" });
-
+    {
+        // 404 Not Found: resource does not exist
+        // Why 404 exists: client tried to delete a resource that isn't present
+        return Results.NotFound(new ErrorResponse(404, "NotFound", $"Note with id {id} not found", traceId));
+    }
     return Results.NoContent();
 });
 

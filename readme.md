@@ -221,6 +221,65 @@ npm install
 npm run dev
 Open http://localhost:5173
 
+## Error Handling
+
+Global exception handling middleware catches all unhandled exceptions, logs full details server-side with ILogger, and returns a consistent JSON shape:
+
+{ "status": number, "error": string, "message": string, "traceId": string }
+
+Why each error type exists:
+- 400 ValidationError: client sent invalid data. Can be fixed by client. Example: title < 3 chars.
+- 404 NotFound: requested resource does not exist. Client needs correct id.
+- 500 InternalServerError: unexpected server error. Generic message to client, full details logged server-side with traceId.
+
+Example requests and responses:
+
+### 400 Bad Request - Validation
+How to trigger: POST /notes with title shorter than 3 characters
+```http
+POST /notes
+Content-Type: application/json
+
+{ "title": "Hi", "description": "test" }
+```
+Response 400:
+```json
+{
+  "status": 400,
+  "error": "ValidationError",
+  "message": "Title must be at least 3 characters",
+  "traceId": "3f1a2b4c-..."
+}
+```
+
+### 404 Not Found - Note doesn't exist
+How to trigger: GET /notes/{id} with a valid GUID that was never created
+```http
+GET /notes/11111111-1111-1111-1111-111111111111
+```
+Response 404:
+```json
+{
+  "status": 404,
+  "error": "NotFound",
+  "message": "Note with id 11111111-1111-1111-1111-111111111111 not found",
+  "traceId": "9e2d4f..."
+}
+```
+
+### 500 Internal Server Error - Unexpected error
+How to trigger: Force an unhandled exception (e.g., temporarily introduce bug or call internal error endpoint). In production, any bug not caught by validation will be caught by middleware.
+Response 500:
+```json
+{
+  "status": 500,
+  "error": "InternalServerError",
+  "message": "An unexpected error occurred. Please try again later.",
+  "traceId": "a7c9e1..."
+}
+```
+Full exception with stack trace is logged server-side via ILogger, never exposed to client.
+
 ## Next Improvements
 - Add PUT/PATCH for update
 - Add search/filter
