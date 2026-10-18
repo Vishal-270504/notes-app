@@ -1,39 +1,94 @@
-# Notes App - Beginner Friendly Plan
+# Notes App
 
-> Repo renamed from `notes-api-pagination` to `notes-app` for clarity.
-Phase 2 / Video Two Learning: Input Validation
+Backend: ASP.NET Core Minimal API  
+Frontend: React + TypeScript + Vite  
+Storage: In-memory lists (users and notes; no database)
 
-## Architecture
-Backend: ASP.NET Core Minimal API (.NET 8)
-Frontend: React + TypeScript + Vite
-Storage: In-memory List<Note> (no database)
+Passwords are hashed with ASP.NET Identity `PasswordHasher` (PBKDF2). Notes require a JWT and are scoped to the user who created them.
+
+## Run the API
+
+```powershell
+cd NotesApi
+dotnet run --urls http://localhost:5000
+```
+
+API: `http://localhost:5000`  
+Swagger: `http://localhost:5000/swagger`
+
+Frontend (optional; note requests now need a JWT):
+
+```powershell
+cd NotesFrontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`
+
+## Auth curl examples
+
+Use `curl.exe` on Windows PowerShell so the command is not aliased to `Invoke-WebRequest`.
+
+### Signup
+
+```powershell
+curl.exe -s -X POST http://localhost:5000/auth/signup -H "Content-Type: application/json" --data-raw '{"email":"alice@example.com","password":"Password123!"}'
+```
+
+### Login
+
+```powershell
+curl.exe -s -X POST http://localhost:5000/auth/login -H "Content-Type: application/json" --data-raw '{"email":"alice@example.com","password":"Password123!"}'
+```
+
+Copy the `token` from the login JSON, then:
+
+### Authenticated request
+
+```powershell
+curl.exe -s http://localhost:5000/notes -H "Authorization: Bearer PASTE_TOKEN_HERE"
+```
+
+Create a note with the same token:
+
+```powershell
+curl.exe -s -X POST http://localhost:5000/notes -H "Authorization: Bearer PASTE_TOKEN_HERE" -H "Content-Type: application/json" --data-raw '{"title":"My first note","description":"Owned by alice"}'
+```
+
+Missing or invalid tokens return **401**. Accessing another user's note by id returns **403**.
 
 ## API Endpoints
 
+POST /auth/signup
+- Body: `{ email, password }`
+- Password min 8 characters; stored as a hash, never plain text
+- Returns 201 Created, 400 ValidationError, or 409 if the email is taken
+
+POST /auth/login
+- Body: `{ email, password }`
+- Returns a JWT that expires after 24 hours: `{ token, expiresAt, userId, email }`
+- Invalid credentials return 401
+
 GET /notes?page=1&limit=10
-- Returns paginated notes
-- Query params validated
-- Response includes metadata
+- Requires `Authorization: Bearer <token>`
+- Returns only the current user's notes (paginated)
 
 POST /notes
-- Body: { title, description? }
+- Requires a valid token
+- Body: `{ title, description? }`
 - Title required, min 3 chars, max 200
 - Description optional, max 500 chars
-- Returns 201 Created or 400 Validation failed with details
+- Note is stored with the authenticated user's id
+- Returns 201 Created or 400 ValidationError
 
 GET /notes/{id}
-- GUID validation via route constraint
-- Returns 404 if not found
+- Requires a valid token
+- Returns 404 if not found, 403 if the note belongs to another user
 
 DELETE /notes/{id}
-- Returns 204 on success, 404 if not found
-
-GET /notes/{id}
-- GUID validation via route constraint
-- Returns 404 if not found
-
-DELETE /notes/{id}
-- Returns 204 on success, 404 if not found
+- Requires a valid token
+- Returns 204 on success, 404 if not found, 403 if the note belongs to another user
 
 ## Edge Cases Handled
 
@@ -207,20 +262,6 @@ With pagination:
 - Scalable to millions of notes
 - Better UX with page controls
 
-## Running the Project
-
-Backend:
-cd notes-app/NotesApi
-dotnet run
-API runs on http://localhost:5000
-Swagger at http://localhost:5000/swagger
-
-Frontend:
-cd notes-app/NotesFrontend
-npm install
-npm run dev
-Open http://localhost:5173
-
 ## Error Handling
 
 Global exception handling middleware catches all unhandled exceptions, logs full details server-side with ILogger, and returns a consistent JSON shape:
@@ -229,7 +270,10 @@ Global exception handling middleware catches all unhandled exceptions, logs full
 
 Why each error type exists:
 - 400 ValidationError: client sent invalid data. Can be fixed by client. Example: title < 3 chars.
+- 401 Unauthorized: missing/invalid JWT, or bad login credentials.
+- 403 Forbidden: authenticated user tried to read or delete another user's note.
 - 404 NotFound: requested resource does not exist. Client needs correct id.
+- 409 Conflict: signup email is already registered.
 - 500 InternalServerError: unexpected server error. Generic message to client, full details logged server-side with traceId.
 
 Example requests and responses:
@@ -284,5 +328,4 @@ Full exception with stack trace is logged server-side via ILogger, never exposed
 - Add PUT/PATCH for update
 - Add search/filter
 - Persist to file/db
-- Add authentication
 - Add unit tests
