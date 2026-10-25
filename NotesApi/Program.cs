@@ -44,6 +44,7 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
+builder.Services.AddMemoryCache();
 
 // Register repository, service, and controller
 builder.Services.AddSingleton<INotesRepository, InMemoryNotesRepository>();

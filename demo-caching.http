@@ -1,0 +1,46 @@
+@baseUrl = http://localhost:5001
+@token = 
+
+### 1. Sign up a user
+POST {{baseUrl}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "cachetest@example.com",
+  "password": "password123"
+}
+
+### 2. Login and capture token
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "cachetest@example.com",
+  "password": "password123"
+}
+
+### 3. Extract token from login response
+@token = {{login.response.body.$.token}}
+
+### 4. GET /notes (expect X-Cache: MISS - first request, empty list)
+GET {{baseUrl}}/notes
+Authorization: Bearer {{token}}
+
+### 5. GET /notes again (expect X-Cache: HIT - cached)
+GET {{baseUrl}}/notes
+Authorization: Bearer {{token}}
+
+### 6. POST a new note
+POST {{baseUrl}}/notes
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "title": "Cached Note",
+  "description": "This note should appear after cache invalidation"
+}
+
+### 7. GET /notes again (expect X-Cache: MISS - cache invalidated by write, new note appears)
+GET {{baseUrl}}/notes
+Authorization: Bearer {{token}}

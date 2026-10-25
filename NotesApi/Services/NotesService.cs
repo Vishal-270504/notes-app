@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Caching.Memory;
 using NotesApi.Models;
 using NotesApi.Repositories;
 
@@ -7,13 +9,19 @@ namespace NotesApi.Services;
 public class NotesService
 {
     private readonly INotesRepository _repository;
+    private readonly IMemoryCache _cache;
+    // Per-user version numbers for cache invalidation.
+    // Each write increments the user's version, so old cached lists become unreachable.
+    // This avoids clearing the whole cache and keeps other users' data intact.
+    private static readonly ConcurrentDictionary<Guid, long> _userCacheVersions = new();
 
-    public NotesService(INotesRepository repository)
+    public NotesService(INotesRepository repository, IMemoryCache cache)
     {
         _repository = repository;
+        _cache = cache;
     }
 
-    public async Task<(bool Success, List<string> Errors, object? Result)> GetNotesAsync(Guid userId, int? page, int? limit)
+    public async Task<(bool Success, List<string> Errors, object? Result, bool CacheHit)> GetNotesAsync(Guid userId, int? page, int? limit)
     {
         int pageNumber = page.GetValueOrDefault(1);
         int pageSize = limit.GetValueOrDefault(10);
@@ -21,12 +29,36 @@ public class NotesService
         if (pageSize < 1) pageSize = 10;
         if (pageSize > 100) pageSize = 100;
 
+        // Cache key includes userId, page, pageSize, and a per-user version number.
+        // The version is incremented on every write (create/delete/seed), invalidating old entries.
+        // This ensures users never see each other's notes and writes are immediately visible.
+        var version = GetUserCacheVersion(userId);
+        var cacheKey = $"notes:{userId}:{pageNumber}:{pageSize}:v{version}";
+
+        if (_cache.TryGetValue(cacheKey, out object? cachedResult))
+        {
+            return (true, [], cachedResult, true);
+        }
+
         int total = await _repository.CountByUserIdAsync(userId);
         int totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
         var pagedNotes = await _repository.GetPagedByUserIdAsync(userId, pageNumber, pageSize);
 
-        return (true, [], new { page = pageNumber, limit = pageSize, total, totalPages, notes = pagedNotes });
+        var result = new { page = pageNumber, limit = pageSize, total, totalPages, notes = pagedNotes };
+        _cache.Set(cacheKey, result, TimeSpan.FromSeconds(60));
+
+        return (true, [], result, false);
+    }
+
+    private long GetUserCacheVersion(Guid userId)
+    {
+        return _userCacheVersions.GetOrAdd(userId, 0);
+    }
+
+    private void IncrementUserCacheVersion(Guid userId)
+    {
+        _userCacheVersions.AddOrUpdate(userId, 1, (_, v) => v + 1);
     }
 
     public async Task<(bool Success, List<string> Errors, Note? Note)> CreateNoteAsync(Guid userId, string? title, string? description)
@@ -63,6 +95,7 @@ public class NotesService
         };
 
         var createdNote = await _repository.AddAsync(note);
+        IncrementUserCacheVersion(userId);
         return (true, [], createdNote);
     }
 
@@ -100,6 +133,10 @@ public class NotesService
         }
 
         var removed = await _repository.RemoveAsync(id, userId);
+        if (removed)
+        {
+            IncrementUserCacheVersion(userId);
+        }
         return (removed, []);
     }
 
@@ -143,6 +180,7 @@ public class NotesService
         }
 
         sw.Stop();
+        IncrementUserCacheVersion(userId);
         return (true, [], new { seeded = inserted, elapsedMs = sw.ElapsedMilliseconds, message = "Seeding complete. Use GET /notes/benchmark to measure query time." });
     }
 

@@ -20,7 +20,8 @@ public class NotesController : ControllerBase
     public async Task<IActionResult> GetNotes(int? page, int? limit)
     {
         var userId = GetUserId();
-        var (success, errors, result) = await _service.GetNotesAsync(userId, page, limit);
+        var (success, errors, result, cacheHit) = await _service.GetNotesAsync(userId, page, limit);
+        Response.Headers["X-Cache"] = cacheHit ? "HIT" : "MISS";
         return success ? Ok(result) : BadRequest(errors);
     }
 
