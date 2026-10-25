@@ -52,6 +52,7 @@ public class InMemoryNotesRepository : INotesRepository
     {
         lock (_lock)
         {
+            // Ownership check at repository level: only delete if both id and userId match
             var note = _notes.FirstOrDefault(n => n.Id == id && n.UserId == userId);
             if (note == null)
             {

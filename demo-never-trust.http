@@ -1,0 +1,88 @@
+@baseUrl = http://localhost:5000
+@accessToken = {{login.response.body.token}}
+@noteId = {{createNormal.response.body.id}}
+
+### 1. Create a note normally (valid request)
+# @name createNormal
+POST {{baseUrl}}/notes
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "title": "My legitimate note",
+  "description": "Created normally without any fake fields"
+}
+
+### 2. Create a note with fake "userId" and fake "id" in the body
+# Server must ignore these and use the real user's ID + server-generated ID
+# @name createWithFakeFields
+POST {{baseUrl}}/notes
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "title": "Note with fake fields",
+  "description": "Client tries to spoof userId and id",
+  "userId": "00000000-0000-0000-0000-000000000000",
+  "id": "11111111-1111-1111-1111-111111111111",
+  "createdAt": "2020-01-01T00:00:00Z",
+  "updatedAt": "2020-01-01T00:00:00Z"
+}
+
+### Expected response for #2:
+# - Status: 201 Created
+# - Response body has the REAL authenticated user's userId (not the fake one)
+# - Response body has a SERVER-GENERATED id (not the fake one)
+# - createdAt/updatedAt are server timestamps (not the fake ones)
+
+### 3. Try to read another user's note by id (should get 404 or 403)
+# First, we need a second user. Sign up and log in as user2.
+# @name signupUser2
+POST {{baseUrl}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "user2@example.com",
+  "password": "password123"
+}
+
+### @name loginUser2
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "user2@example.com",
+  "password": "password123"
+}
+
+@accessToken2 = {{loginUser2.response.body.token}}
+
+### User2 creates their own note
+# @name user2Note
+POST {{baseUrl}}/notes
+Content-Type: application/json
+Authorization: Bearer {{accessToken2}}
+
+{
+  "title": "User2's private note",
+  "description": "This belongs to user2"
+}
+
+@user2NoteId = {{user2Note.response.body.id}}
+
+### User1 tries to GET user2's note by id → should get 404 (not found) or 403 (forbidden)
+GET {{baseUrl}}/notes/{{user2NoteId}}
+Authorization: Bearer {{accessToken}}
+
+### Expected response for above GET:
+# - Status: 404 Not Found (or 403 Forbidden)
+# - Body: { "statusCode": 404, "error": "NotFound", "message": "Note with id ... not found" }
+#   OR { "statusCode": 403, "error": "Forbidden", "message": "You do not have access to this note" }
+
+### User1 tries to DELETE user2's note by id → should get 404 or 403
+DELETE {{baseUrl}}/notes/{{user2NoteId}}
+Authorization: Bearer {{accessToken}}
+
+### Expected response for above DELETE:
+# - Status: 404 Not Found (or 403 Forbidden)
+# - Same error shape as GET

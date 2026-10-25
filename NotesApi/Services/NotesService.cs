@@ -51,14 +51,15 @@ public class NotesService
             return (false, errors, null);
         }
 
+        // Server owns Id, UserId, CreatedAt, UpdatedAt — never trust client values
         var note = new Note
         {
             Id = Guid.NewGuid(),
-            UserId = userId,
+            UserId = userId,              // from token, not request body
             Title = trimmedTitle!,
             Description = string.IsNullOrWhiteSpace(trimmedDescription) ? null : trimmedDescription,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,  // server timestamp
+            UpdatedAt = DateTime.UtcNow   // server timestamp
         };
 
         var createdNote = await _repository.AddAsync(note);
@@ -74,6 +75,7 @@ public class NotesService
             return (false, [$"Note with id {id} not found"], null);
         }
 
+        // Ownership check: server enforces that users only access their own notes
         if (note.UserId != userId)
         {
             return (false, ["You do not have access to this note"], null);
@@ -91,6 +93,7 @@ public class NotesService
             return (false, [$"Note with id {id} not found"]);
         }
 
+        // Ownership check: server enforces that users only delete their own notes
         if (note.UserId != userId)
         {
             return (false, ["You do not have access to this note"]);

@@ -28,7 +28,8 @@ public class NotesController : ControllerBase
     public async Task<IActionResult> CreateNote([FromBody] NoteCreateDto dto)
     {
         var traceId = HttpContext.Items["TraceId"]?.ToString() ?? Guid.NewGuid().ToString();
-        var userId = GetUserId();
+        var userId = GetUserId(); // Server owns UserId: always from token, never from body
+        // dto only contains Title/Description; any UserId/Id/CreatedAt/UpdatedAt sent by client are ignored by model binding
         var (success, errors, note) = await _service.CreateNoteAsync(userId, dto.Title, dto.Description);
 
         if (!success)
@@ -44,7 +45,8 @@ public class NotesController : ControllerBase
     public async Task<IActionResult> GetNote(Guid id)
     {
         var traceId = HttpContext.Items["TraceId"]?.ToString() ?? Guid.NewGuid().ToString();
-        var userId = GetUserId();
+        var userId = GetUserId(); // Server owns UserId: from token
+        // Ownership check enforced in service: caller can only access their own notes
         var (success, errors, note) = await _service.GetNoteByIdAsync(userId, id);
 
         if (!success)
@@ -62,7 +64,8 @@ public class NotesController : ControllerBase
     public async Task<IActionResult> DeleteNote(Guid id)
     {
         var traceId = HttpContext.Items["TraceId"]?.ToString() ?? Guid.NewGuid().ToString();
-        var userId = GetUserId();
+        var userId = GetUserId(); // Server owns UserId: from token
+        // Ownership check enforced in service+repository: caller can only delete their own notes
         var (success, errors) = await _service.DeleteNoteAsync(userId, id);
 
         if (!success)
