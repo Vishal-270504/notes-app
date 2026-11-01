@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { z } from 'zod';
 import {
   Note,
   fetchNotes,
   createNote,
   deleteNote,
+  NotFoundError,
   signup,
   login,
   getToken,
@@ -21,6 +22,11 @@ const authSchema = z.object({
   email: z.string().trim().email('Enter a valid email'),
   password: z.string().min(8, 'Password must be at least 8 characters')
 });
+
+const skeletonCss = `
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.skeleton { background: #e0e0e0; border-radius: 4px; animation: pulse 1.2s ease-in-out infinite; }
+`;
 
 function shortenToken(token: string) {
   if (token.length < 24) return token;
@@ -40,29 +46,56 @@ function App() {
   const [limit] = useState(10);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [skeleton, setSkeleton] = useState(false); // true only for first load / page change
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [online, setOnline] = useState(() => navigator.onLine);
+  const titleRef = useRef<HTMLInputElement>(null);
 
-  const loadNotes = async (pageNum: number) => {
+  const loadNotes = async (pageNum: number, withSkeleton = false) => {
     setLoading(true);
-    setError(null);
+    setSkeleton(withSkeleton);
+    setLoadError(null);
     try {
       const data = await fetchNotes(pageNum, limit);
       setNotes(data.notes);
       setTotalPages(data.totalPages || 1);
       setPage(data.page);
     } catch (e: any) {
+      console.error(e);
       if (!getToken()) setAuthed(false);
-      setError(e.message || 'Failed to load notes');
+      setLoadError(e.message || "We couldn't load your notes.");
     } finally {
       setLoading(false);
+      setSkeleton(false);
     }
   };
 
   useEffect(() => {
-    if (authed) loadNotes(page);
+    if (authed) loadNotes(page, true);
   }, [page, authed]);
+
+  // Going back online reloads the notes. The ref keeps the listener using the latest page and auth state.
+  const reloadRef = useRef<() => void>(() => {});
+  reloadRef.current = () => {
+    if (authed) loadNotes(page);
+  };
+
+  useEffect(() => {
+    const goOnline = () => {
+      setOnline(true);
+      reloadRef.current();
+    };
+    const goOffline = () => setOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,6 +131,7 @@ function App() {
     setAuthed(false);
     setNotes([]);
     setError(null);
+    setLoadError(null);
     setAuthMessage('Logged out. The token is gone, so /notes will return 401 until you log in again.');
   };
 
@@ -116,7 +150,7 @@ function App() {
       await createNote(parseResult.data.title, parseResult.data.description || undefined);
       setTitle('');
       setDescription('');
-      loadNotes(page);
+      loadNotes(page); // no skeleton after a create
     } catch (e: any) {
       if (!getToken()) setAuthed(false);
       setError(e.message || 'Failed to create note');
@@ -125,10 +159,16 @@ function App() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this note?')) return;
+    setError(null);
     try {
       await deleteNote(id);
       loadNotes(page);
     } catch (e: any) {
+      if (e instanceof NotFoundError) {
+        setError(e.message);
+        loadNotes(page);
+        return;
+      }
       if (!getToken()) setAuthed(false);
       setError(e.message || 'Failed to delete note');
     }
@@ -210,6 +250,14 @@ function App() {
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 20, fontFamily: 'system-ui, sans-serif' }}>
+      <style>{skeletonCss}</style>
+
+      {!online && (
+        <div role="status" style={{ background: '#fff3cd', border: '1px solid #e0b400', padding: 10, borderRadius: 6, marginBottom: 12 }}>
+          You're offline. Changes will fail until you reconnect.
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ margin: 0 }}>Your notes</h1>
         <div>
@@ -230,6 +278,7 @@ function App() {
 
       <form onSubmit={handleCreate} style={{ marginBottom: 20 }}>
         <input
+          ref={titleRef}
           placeholder="Title (min 3 chars)"
           value={title}
           onChange={e => setTitle(e.target.value)}
@@ -245,23 +294,44 @@ function App() {
       </form>
 
       {error && <div style={{ color: 'red', marginBottom: 10 }}>{error}</div>}
-      {loading && <div>Loading...</div>}
 
-      {!loading && notes.length === 0 && (
-        <p style={{ color: '#555' }}>No notes yet for this user. Create one — it will be stored with your user id.</p>
+      {loading && skeleton ? (
+        <div aria-label="Loading notes">
+          {[0, 1, 2].map(i => (
+            <div key={i} style={{ border: '1px solid #ccc', padding: 12, marginBottom: 10, borderRadius: 6 }}>
+              <div className="skeleton" style={{ height: 18, width: '40%', marginBottom: 10 }} />
+              <div className="skeleton" style={{ height: 12, width: '90%', marginBottom: 6 }} />
+              <div className="skeleton" style={{ height: 12, width: '70%' }} />
+            </div>
+          ))}
+        </div>
+      ) : loadError ? (
+        <div style={{ border: '1px solid #f5c2c7', background: '#fff5f5', padding: 16, borderRadius: 6, marginBottom: 10 }}>
+          <strong>Couldn't load your notes</strong>
+          <p style={{ margin: '6px 0 12px' }}>{loadError}</p>
+          <button onClick={() => loadNotes(page)} style={{ padding: '6px 12px' }}>Retry</button>
+        </div>
+      ) : notes.length === 0 ? (
+        <div style={{ border: '1px dashed #aaa', padding: 24, borderRadius: 6, textAlign: 'center' }}>
+          <h3 style={{ marginTop: 0 }}>No notes yet</h3>
+          <p style={{ color: '#555' }}>Create your first note to get started.</p>
+          <button onClick={() => titleRef.current?.focus()} style={{ padding: '8px 16px' }}>
+            Create your first note
+          </button>
+        </div>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0 }}>
+          {notes.map(n => (
+            <li key={n.id} style={{ border: '1px solid #ccc', padding: 12, marginBottom: 10, borderRadius: 6 }}>
+              <h3 style={{ marginTop: 0 }}>{n.title}</h3>
+              <p>{n.description || <em>No description</em>}</p>
+              <small>{new Date(n.createdAt).toLocaleString()}</small>
+              <br />
+              <button onClick={() => handleDelete(n.id)} style={{ marginTop: 8, color: 'red' }}>Delete</button>
+            </li>
+          ))}
+        </ul>
       )}
-
-      <ul style={{ listStyle: 'none', padding: 0 }}>
-        {notes.map(n => (
-          <li key={n.id} style={{ border: '1px solid #ccc', padding: 12, marginBottom: 10, borderRadius: 6 }}>
-            <h3 style={{ marginTop: 0 }}>{n.title}</h3>
-            <p>{n.description || <em>No description</em>}</p>
-            <small>{new Date(n.createdAt).toLocaleString()}</small>
-            <br />
-            <button onClick={() => handleDelete(n.id)} style={{ marginTop: 8, color: 'red' }}>Delete</button>
-          </li>
-        ))}
-      </ul>
 
       <div style={{ marginTop: 20 }}>
         <button disabled={page <= 1 || loading} onClick={() => setPage(p => p - 1)}>Previous</button>
