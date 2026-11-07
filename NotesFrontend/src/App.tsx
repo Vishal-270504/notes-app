@@ -23,15 +23,39 @@ const authSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters')
 });
 
-const skeletonCss = `
+type Field = 'title' | 'description' | 'email' | 'password';
+type FieldErrors = Partial<Record<Field, string>>;
+
+// Validates one field with the same zod rules used on submit.
+function checkField(field: Field, value: string): string | undefined {
+  const result =
+    field === 'title' ? noteSchema.shape.title.safeParse(value)
+    : field === 'description' ? noteSchema.shape.description.safeParse(value)
+    : field === 'email' ? authSchema.shape.email.safeParse(value)
+    : authSchema.shape.password.safeParse(value);
+  return result.success ? undefined : result.error.issues[0]?.message;
+}
+
+const globalCss = `
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .skeleton { background: #e0e0e0; border-radius: 4px; animation: pulse 1.2s ease-in-out infinite; }
+button:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
 `;
+
+const labelStyle: React.CSSProperties = { display: 'block', fontWeight: 600, marginBottom: 4, color: '#333' };
+const helperStyle: React.CSSProperties = { display: 'block', fontSize: 12, color: '#666', marginBottom: 6 };
+const errorStyle: React.CSSProperties = { display: 'block', fontSize: 13, color: '#b00020', marginBottom: 8 };
+const inputStyle: React.CSSProperties = { width: '100%', marginBottom: 4, padding: 8, boxSizing: 'border-box', border: '1px solid #888', borderRadius: 4 };
 
 function shortenToken(token: string) {
   if (token.length < 24) return token;
   return `${token.slice(0, 18)}…${token.slice(-10)}`;
 }
+
+type Toast = { id: number; text: string };
 
 function App() {
   const [authed, setAuthed] = useState(() => !!getToken());
@@ -40,6 +64,7 @@ function App() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [authErrors, setAuthErrors] = useState<FieldErrors>({});
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [page, setPage] = useState(1);
@@ -51,8 +76,18 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [online, setOnline] = useState(() => navigator.onLine);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const titleRef = useRef<HTMLInputElement>(null);
+  const toastId = useRef(0);
+
+  const showToast = (text: string) => {
+    const id = ++toastId.current;
+    setToasts(list => [...list, { id, text }]);
+    setTimeout(() => setToasts(list => list.filter(t => t.id !== id)), 3000);
+  };
 
   const loadNotes = async (pageNum: number, withSkeleton = false) => {
     setLoading(true);
@@ -97,6 +132,16 @@ function App() {
     };
   }, []);
 
+  // Escape closes the delete dialog.
+  useEffect(() => {
+    if (!pendingDelete) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPendingDelete(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pendingDelete]);
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -104,15 +149,21 @@ function App() {
 
     const parsed = authSchema.safeParse({ email: authEmail, password: authPassword });
     if (!parsed.success) {
-      setError(parsed.error.issues.map(i => i.message).join(', '));
+      const errs: FieldErrors = {};
+      for (const issue of parsed.error.issues) {
+        const key = issue.path[0] as Field;
+        errs[key] ??= issue.message;
+      }
+      setAuthErrors({ email: errs.email, password: errs.password });
       return;
     }
+    setAuthErrors({});
 
     try {
       if (mode === 'signup') {
         await signup(parsed.data.email, parsed.data.password);
         setMode('login');
-        setAuthMessage('Account created. Log in next — that is when the API gives you a JWT.');
+        setAuthMessage('Account created. Please log in.');
         return;
       }
 
@@ -132,7 +183,7 @@ function App() {
     setNotes([]);
     setError(null);
     setLoadError(null);
-    setAuthMessage('Logged out. The token is gone, so /notes will return 401 until you log in again.');
+    setAuthMessage('Logged out.');
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -141,27 +192,38 @@ function App() {
 
     const parseResult = noteSchema.safeParse({ title, description });
     if (!parseResult.success) {
-      const messages = parseResult.error.issues.map(i => i.message).join(', ');
-      setError(`Validation error: ${messages}`);
+      const errs: FieldErrors = {};
+      for (const issue of parseResult.error.issues) {
+        const key = issue.path[0] as Field;
+        errs[key] ??= issue.message;
+      }
+      setFieldErrors({ title: errs.title, description: errs.description });
       return;
     }
+    setFieldErrors({});
 
     try {
       await createNote(parseResult.data.title, parseResult.data.description || undefined);
       setTitle('');
       setDescription('');
+      showToast('Note created');
       loadNotes(page); // no skeleton after a create
     } catch (e: any) {
       if (!getToken()) setAuthed(false);
       setError(e.message || 'Failed to create note');
+      showToast('Something went wrong. Try again.');
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this note?')) return;
+  // Delete now opens a dialog first. Nothing is deleted until the red button is clicked.
+  const confirmDelete = async () => {
+    const id = pendingDelete;
+    setPendingDelete(null);
+    if (!id) return;
     setError(null);
     try {
       await deleteNote(id);
+      showToast('Note deleted');
       loadNotes(page);
     } catch (e: any) {
       if (e instanceof NotFoundError) {
@@ -171,6 +233,7 @@ function App() {
       }
       if (!getToken()) setAuthed(false);
       setError(e.message || 'Failed to delete note');
+      showToast('Something went wrong. Try again.');
     }
   };
 
@@ -178,18 +241,11 @@ function App() {
 
   if (!authed) {
     return (
-      <div style={{ maxWidth: 480, margin: '40px auto', padding: 20, fontFamily: 'system-ui, sans-serif' }}>
-        <h1 style={{ marginBottom: 8 }}>Notes — Auth demo</h1>
-        <p style={{ color: '#444', lineHeight: 1.5 }}>
-          Authorization in one sentence: <strong>prove who you are, then the API only lets you touch your own notes.</strong>
-        </p>
-        <ol style={{ color: '#333', lineHeight: 1.6, paddingLeft: 20 }}>
-          <li><strong>Sign up</strong> creates a user. The password is hashed on the server.</li>
-          <li><strong>Log in</strong> checks that password and returns a JWT (a signed pass).</li>
-          <li><strong>Notes</strong> requests send <code>Authorization: Bearer &lt;token&gt;</code>. No token → 401.</li>
-        </ol>
+      <div style={{ maxWidth: 480, margin: '40px auto', padding: 20, fontFamily: 'system-ui, sans-serif', color: '#333' }}>
+        <style>{globalCss}</style>
+        <h1 style={{ marginBottom: 16 }}>Notes</h1>
 
-        <div style={{ display: 'flex', gap: 8, margin: '20px 0' }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           <button
             type="button"
             onClick={() => { setMode('signup'); setError(null); }}
@@ -220,37 +276,52 @@ function App() {
           </button>
         </div>
 
-        <form onSubmit={handleAuth}>
+        <form onSubmit={handleAuth} noValidate>
+          <label htmlFor="auth-email" style={labelStyle}>Email</label>
           <input
+            id="auth-email"
             type="email"
-            placeholder="Email"
             value={authEmail}
-            onChange={e => setAuthEmail(e.target.value)}
+            onChange={e => {
+              setAuthEmail(e.target.value);
+              if (authErrors.email) setAuthErrors(a => ({ ...a, email: checkField('email', e.target.value) }));
+            }}
+            onBlur={() => setAuthErrors(a => ({ ...a, email: checkField('email', authEmail) }))}
             autoComplete="email"
-            style={{ width: '100%', marginBottom: 8, padding: 8, boxSizing: 'border-box' }}
+            style={inputStyle}
           />
+          {authErrors.email && <span style={errorStyle}>{authErrors.email}</span>}
+
+          <label htmlFor="auth-password" style={labelStyle}>Password</label>
           <input
+            id="auth-password"
             type="password"
-            placeholder="Password (min 8 characters)"
             value={authPassword}
-            onChange={e => setAuthPassword(e.target.value)}
+            onChange={e => {
+              setAuthPassword(e.target.value);
+              if (authErrors.password) setAuthErrors(a => ({ ...a, password: checkField('password', e.target.value) }));
+            }}
+            onBlur={() => setAuthErrors(a => ({ ...a, password: checkField('password', authPassword) }))}
             autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-            style={{ width: '100%', marginBottom: 8, padding: 8, boxSizing: 'border-box' }}
+            style={inputStyle}
           />
-          <button type="submit" style={{ padding: '8px 16px' }}>
+          <span style={helperStyle}>At least 8 characters</span>
+          {authErrors.password && <span style={errorStyle}>{authErrors.password}</span>}
+
+          <button type="submit" style={{ padding: '8px 16px', marginTop: 8 }}>
             {mode === 'signup' ? 'Create account' : 'Log in and get a token'}
           </button>
         </form>
 
         {authMessage && <div style={{ color: '#0a6', marginTop: 12 }}>{authMessage}</div>}
-        {error && <div style={{ color: 'red', marginTop: 12 }}>{error}</div>}
+        {error && <div style={{ color: '#b00020', marginTop: 12 }}>{error}</div>}
       </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: 20, fontFamily: 'system-ui, sans-serif' }}>
-      <style>{skeletonCss}</style>
+    <div style={{ maxWidth: 800, margin: '0 auto', padding: 20, fontFamily: 'system-ui, sans-serif', color: '#333' }}>
+      <style>{globalCss}</style>
 
       {!online && (
         <div role="status" style={{ background: '#fff3cd', border: '1px solid #e0b400', padding: 10, borderRadius: 6, marginBottom: 12 }}>
@@ -271,29 +342,42 @@ function App() {
         <div style={{ marginTop: 6, wordBreak: 'break-all' }}>
           <strong>Token sent on every notes request:</strong> {token ? shortenToken(token) : '(none)'}
         </div>
-        <div style={{ marginTop: 6 }}>
-          Log in as a second user in another browser (or after logout) to show they cannot see these notes.
-        </div>
       </div>
 
-      <form onSubmit={handleCreate} style={{ marginBottom: 20 }}>
+      <form onSubmit={handleCreate} noValidate style={{ marginBottom: 20 }}>
+        <label htmlFor="note-title" style={labelStyle}>Title</label>
         <input
+          id="note-title"
           ref={titleRef}
-          placeholder="Title (min 3 chars)"
           value={title}
-          onChange={e => setTitle(e.target.value)}
-          style={{ width: '100%', marginBottom: 8, padding: 8, boxSizing: 'border-box' }}
+          onChange={e => {
+            setTitle(e.target.value);
+            if (fieldErrors.title) setFieldErrors(f => ({ ...f, title: checkField('title', e.target.value) }));
+          }}
+          onBlur={() => setFieldErrors(f => ({ ...f, title: checkField('title', title) }))}
+          style={inputStyle}
         />
+        <span style={helperStyle}>At least 3 characters</span>
+        {fieldErrors.title && <span style={errorStyle}>{fieldErrors.title}</span>}
+
+        <label htmlFor="note-description" style={labelStyle}>Description (optional)</label>
         <textarea
-          placeholder="Description (optional, max 500 chars)"
+          id="note-description"
           value={description}
-          onChange={e => setDescription(e.target.value)}
-          style={{ width: '100%', marginBottom: 8, padding: 8, minHeight: 80, boxSizing: 'border-box' }}
+          onChange={e => {
+            setDescription(e.target.value);
+            if (fieldErrors.description) setFieldErrors(f => ({ ...f, description: checkField('description', e.target.value) }));
+          }}
+          onBlur={() => setFieldErrors(f => ({ ...f, description: checkField('description', description) }))}
+          style={{ ...inputStyle, minHeight: 80 }}
         />
-        <button type="submit" style={{ padding: '8px 16px' }}>Create Note</button>
+        {fieldErrors.description && <span style={errorStyle}>{fieldErrors.description}</span>}
+
+        <span style={{ ...helperStyle, marginTop: 4 }}>A note is a short piece of text saved to your account. Only you can see it.</span>
+        <button type="submit" style={{ padding: '8px 16px', marginTop: 4 }}>Create Note</button>
       </form>
 
-      {error && <div style={{ color: 'red', marginBottom: 10 }}>{error}</div>}
+      {error && <div style={{ color: '#b00020', marginBottom: 10 }}>{error}</div>}
 
       {loading && skeleton ? (
         <div aria-label="Loading notes">
@@ -327,11 +411,46 @@ function App() {
               <p>{n.description || <em>No description</em>}</p>
               <small>{new Date(n.createdAt).toLocaleString()}</small>
               <br />
-              <button onClick={() => handleDelete(n.id)} style={{ marginTop: 8, color: 'red' }}>Delete</button>
+              <button
+                onClick={() => setPendingDelete(n.id)}
+                style={{ marginTop: 8, color: 'red', fontSize: 14, padding: '8px 12px' }}
+              >
+                Delete
+              </button>
             </li>
           ))}
         </ul>
       )}
+
+      {pendingDelete && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setPendingDelete(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-title"
+            onClick={e => e.stopPropagation()}
+            style={{ background: '#fff', padding: 20, borderRadius: 8, maxWidth: 360, width: '100%' }}
+          >
+            <h2 id="delete-title" style={{ marginTop: 0, fontSize: 20 }}>Delete this note?</h2>
+            <p style={{ color: '#444' }}>This can't be undone.</p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button autoFocus onClick={() => setPendingDelete(null)} style={{ padding: '8px 12px' }}>Cancel</button>
+              <button onClick={confirmDelete} style={{ padding: '8px 12px', background: '#c62828', color: '#fff', border: 'none', borderRadius: 4 }}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div aria-live="polite" style={{ position: 'fixed', right: 16, bottom: 16, display: 'flex', flexDirection: 'column', gap: 8, zIndex: 1100 }}>
+        {toasts.map(t => (
+          <div key={t.id} style={{ background: '#222', color: '#fff', padding: '10px 14px', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
+            {t.text}
+          </div>
+        ))}
+      </div>
 
       <div style={{ marginTop: 20 }}>
         <button disabled={page <= 1 || loading} onClick={() => setPage(p => p - 1)}>Previous</button>
