@@ -57,6 +57,97 @@ function shortenToken(token: string) {
 
 type Toast = { id: number; text: string };
 
+// Memoized so typing in the form or opening the delete dialog does not re-render every card.
+const NoteCard = React.memo(function NoteCard({ n, onDelete }: { n: Note; onDelete: (id: string) => void }) {
+  return (
+    <li style={{ border: '1px solid #ccc', padding: 12, marginBottom: 10, borderRadius: 6 }}>
+      <h3 style={{ marginTop: 0 }}>{n.title}</h3>
+      <p>{n.description || <em>No description</em>}</p>
+      <small>{new Date(n.createdAt).toLocaleString()}</small>
+      <br />
+      <button
+        onClick={() => onDelete(n.id)}
+        style={{ marginTop: 8, color: 'red', fontSize: 14, padding: '8px 12px' }}
+      >
+        Delete
+      </button>
+    </li>
+  );
+});
+
+// Owns its typing state, so typing re-renders only this form and not the note list.
+function NoteForm({ inputRef, onCreated, onFailed, onAuthLost }: {
+  inputRef: React.RefObject<HTMLInputElement>;
+  onCreated: () => void;
+  onFailed: (message: string) => void;
+  onAuthLost: () => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const parseResult = noteSchema.safeParse({ title, description });
+    if (!parseResult.success) {
+      const errs: FieldErrors = {};
+      for (const issue of parseResult.error.issues) {
+        const key = issue.path[0] as Field;
+        errs[key] ??= issue.message;
+      }
+      setFieldErrors({ title: errs.title, description: errs.description });
+      return;
+    }
+    setFieldErrors({});
+
+    try {
+      await createNote(parseResult.data.title, parseResult.data.description || undefined);
+      setTitle('');
+      setDescription('');
+      onCreated();
+    } catch (e: any) {
+      if (!getToken()) onAuthLost();
+      onFailed(e.message || 'Failed to create note');
+    }
+  };
+
+  return (
+    <form onSubmit={handleCreate} noValidate style={{ marginBottom: 20 }}>
+      <label htmlFor="note-title" style={labelStyle}>Title</label>
+      <input
+        id="note-title"
+        ref={inputRef}
+        value={title}
+        onChange={e => {
+          setTitle(e.target.value);
+          if (fieldErrors.title) setFieldErrors(f => ({ ...f, title: checkField('title', e.target.value) }));
+        }}
+        onBlur={() => setFieldErrors(f => ({ ...f, title: checkField('title', title) }))}
+        style={inputStyle}
+      />
+      <span style={helperStyle}>At least 3 characters</span>
+      {fieldErrors.title && <span style={errorStyle}>{fieldErrors.title}</span>}
+
+      <label htmlFor="note-description" style={labelStyle}>Description (optional)</label>
+      <textarea
+        id="note-description"
+        value={description}
+        onChange={e => {
+          setDescription(e.target.value);
+          if (fieldErrors.description) setFieldErrors(f => ({ ...f, description: checkField('description', e.target.value) }));
+        }}
+        onBlur={() => setFieldErrors(f => ({ ...f, description: checkField('description', description) }))}
+        style={{ ...inputStyle, minHeight: 80 }}
+      />
+      {fieldErrors.description && <span style={errorStyle}>{fieldErrors.description}</span>}
+
+      <span style={{ ...helperStyle, marginTop: 4 }}>A note is a short piece of text saved to your account. Only you can see it.</span>
+      <button type="submit" style={{ padding: '8px 16px', marginTop: 4 }}>Create Note</button>
+    </form>
+  );
+}
+
 function App() {
   const [authed, setAuthed] = useState(() => !!getToken());
   const [email, setEmail] = useState(() => getEmail() ?? '');
@@ -74,9 +165,6 @@ function App() {
   const [skeleton, setSkeleton] = useState(false); // true only for first load / page change
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [online, setOnline] = useState(() => navigator.onLine);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -184,35 +272,6 @@ function App() {
     setError(null);
     setLoadError(null);
     setAuthMessage('Logged out.');
-  };
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    const parseResult = noteSchema.safeParse({ title, description });
-    if (!parseResult.success) {
-      const errs: FieldErrors = {};
-      for (const issue of parseResult.error.issues) {
-        const key = issue.path[0] as Field;
-        errs[key] ??= issue.message;
-      }
-      setFieldErrors({ title: errs.title, description: errs.description });
-      return;
-    }
-    setFieldErrors({});
-
-    try {
-      await createNote(parseResult.data.title, parseResult.data.description || undefined);
-      setTitle('');
-      setDescription('');
-      showToast('Note created');
-      loadNotes(page); // no skeleton after a create
-    } catch (e: any) {
-      if (!getToken()) setAuthed(false);
-      setError(e.message || 'Failed to create note');
-      showToast('Something went wrong. Try again.');
-    }
   };
 
   // Delete now opens a dialog first. Nothing is deleted until the red button is clicked.
@@ -344,38 +403,19 @@ function App() {
         </div>
       </div>
 
-      <form onSubmit={handleCreate} noValidate style={{ marginBottom: 20 }}>
-        <label htmlFor="note-title" style={labelStyle}>Title</label>
-        <input
-          id="note-title"
-          ref={titleRef}
-          value={title}
-          onChange={e => {
-            setTitle(e.target.value);
-            if (fieldErrors.title) setFieldErrors(f => ({ ...f, title: checkField('title', e.target.value) }));
-          }}
-          onBlur={() => setFieldErrors(f => ({ ...f, title: checkField('title', title) }))}
-          style={inputStyle}
-        />
-        <span style={helperStyle}>At least 3 characters</span>
-        {fieldErrors.title && <span style={errorStyle}>{fieldErrors.title}</span>}
-
-        <label htmlFor="note-description" style={labelStyle}>Description (optional)</label>
-        <textarea
-          id="note-description"
-          value={description}
-          onChange={e => {
-            setDescription(e.target.value);
-            if (fieldErrors.description) setFieldErrors(f => ({ ...f, description: checkField('description', e.target.value) }));
-          }}
-          onBlur={() => setFieldErrors(f => ({ ...f, description: checkField('description', description) }))}
-          style={{ ...inputStyle, minHeight: 80 }}
-        />
-        {fieldErrors.description && <span style={errorStyle}>{fieldErrors.description}</span>}
-
-        <span style={{ ...helperStyle, marginTop: 4 }}>A note is a short piece of text saved to your account. Only you can see it.</span>
-        <button type="submit" style={{ padding: '8px 16px', marginTop: 4 }}>Create Note</button>
-      </form>
+      <NoteForm
+        inputRef={titleRef}
+        onCreated={() => {
+          setError(null);
+          showToast('Note created');
+          loadNotes(page); // no skeleton after a create
+        }}
+        onFailed={message => {
+          setError(message);
+          showToast('Something went wrong. Try again.');
+        }}
+        onAuthLost={() => setAuthed(false)}
+      />
 
       {error && <div style={{ color: '#b00020', marginBottom: 10 }}>{error}</div>}
 
@@ -406,18 +446,7 @@ function App() {
       ) : (
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {notes.map(n => (
-            <li key={n.id} style={{ border: '1px solid #ccc', padding: 12, marginBottom: 10, borderRadius: 6 }}>
-              <h3 style={{ marginTop: 0 }}>{n.title}</h3>
-              <p>{n.description || <em>No description</em>}</p>
-              <small>{new Date(n.createdAt).toLocaleString()}</small>
-              <br />
-              <button
-                onClick={() => setPendingDelete(n.id)}
-                style={{ marginTop: 8, color: 'red', fontSize: 14, padding: '8px 12px' }}
-              >
-                Delete
-              </button>
-            </li>
+            <NoteCard key={n.id} n={n} onDelete={setPendingDelete} />
           ))}
         </ul>
       )}
