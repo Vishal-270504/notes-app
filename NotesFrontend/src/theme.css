@@ -1,0 +1,90 @@
+/* One place for every color. Components use var(--name); the dark theme only overrides values. */
+:root {
+  --bg: #ffffff;
+  --text: #222222;
+  --muted: #595959;
+  --card: #ffffff;
+  --panel: #f4f4f4;
+  --surface: #ffffff;
+  --border: #cccccc;
+  --border-input: #888888;
+  --border-strong: #888888;
+  --input-bg: #ffffff;
+  --danger: #b00020;
+  --success: #066b3d;
+  --focus: #2563eb;
+  --skeleton: #e0e0e0;
+  --warn-bg: #fff3cd;
+  --warn-border: #e0b400;
+  --error-bg: #fff5f5;
+  --error-border: #f5c2c7;
+  --btn-bg: #ffffff;
+  --btn-active-bg: #222222;
+  --btn-active-text: #ffffff;
+  --toast-bg: #222222;
+  --toast-text: #ffffff;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #111111;
+  --text: #eeeeee;
+  --muted: #b8b8b8;
+  --card: #1c1c1c;
+  --panel: #1f1f1f;
+  --surface: #1c1c1c;
+  --border: #555555;
+  --border-input: #777777;
+  --border-strong: #666666;
+  --input-bg: #1c1c1c;
+  --danger: #ff8a80;
+  --success: #6fcf97;
+  --focus: #60a5fa;
+  --skeleton: #2a2a2a;
+  --warn-bg: #3a3000;
+  --warn-border: #8a7200;
+  --error-bg: #3a1515;
+  --error-border: #7a2a2a;
+  --btn-bg: #1c1c1c;
+  --btn-active-bg: #eeeeee;
+  --btn-active-text: #111111;
+  --toast-bg: #eeeeee;
+  --toast-text: #111111;
+  color-scheme: dark;
+}
+
+/* Follow the system setting until the user picks one (App sets data-theme on <html>). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111111;
+    --text: #eeeeee;
+    --muted: #b8b8b8;
+    --card: #1c1c1c;
+    --panel: #1f1f1f;
+    --surface: #1c1c1c;
+    --border: #555555;
+    --border-input: #777777;
+    --border-strong: #666666;
+    --input-bg: #1c1c1c;
+    --danger: #ff8a80;
+    --success: #6fcf97;
+    --focus: #60a5fa;
+    --skeleton: #2a2a2a;
+    --warn-bg: #3a3000;
+    --warn-border: #8a7200;
+    --error-bg: #3a1515;
+    --error-border: #7a2a2a;
+    --btn-bg: #1c1c1c;
+    --btn-active-bg: #eeeeee;
+    --btn-active-text: #111111;
+    --toast-bg: #eeeeee;
+    --toast-text: #111111;
+    color-scheme: dark;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
