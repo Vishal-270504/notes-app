@@ -38,17 +38,26 @@ function checkField(field: Field, value: string): string | undefined {
 
 const globalCss = `
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-.skeleton { background: #e0e0e0; border-radius: 4px; animation: pulse 1.2s ease-in-out infinite; }
+.skeleton { background: var(--skeleton); border-radius: 4px; animation: pulse 1.2s ease-in-out infinite; }
 button:focus-visible, input:focus-visible, textarea:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 `;
 
-const labelStyle: React.CSSProperties = { display: 'block', fontWeight: 600, marginBottom: 4, color: '#333' };
-const helperStyle: React.CSSProperties = { display: 'block', fontSize: 12, color: '#666', marginBottom: 6 };
-const errorStyle: React.CSSProperties = { display: 'block', fontSize: 13, color: '#b00020', marginBottom: 8 };
-const inputStyle: React.CSSProperties = { width: '100%', marginBottom: 4, padding: 8, boxSizing: 'border-box', border: '1px solid #888', borderRadius: 4 };
+const labelStyle: React.CSSProperties = { display: 'block', fontWeight: 600, marginBottom: 4, color: 'var(--text)' };
+const helperStyle: React.CSSProperties = { display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6 };
+const errorStyle: React.CSSProperties = { display: 'block', fontSize: 13, color: 'var(--danger)', marginBottom: 8 };
+const inputStyle: React.CSSProperties = { width: '100%', marginBottom: 4, padding: 8, boxSizing: 'border-box', border: '1px solid var(--border-input)', borderRadius: 4, background: 'var(--input-bg)', color: 'var(--text)' };
+
+// Remembered choice wins; otherwise follow the system setting. Storage can throw in private windows.
+function initialTheme(): 'light' | 'dark' {
+  try {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch { /* storage blocked: fall through to the system setting */ }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
 
 function shortenToken(token: string) {
   if (token.length < 24) return token;
@@ -60,14 +69,14 @@ type Toast = { id: number; text: string };
 // Memoized so typing in the form or opening the delete dialog does not re-render every card.
 const NoteCard = React.memo(function NoteCard({ n, onDelete }: { n: Note; onDelete: (id: string) => void }) {
   return (
-    <li style={{ border: '1px solid #ccc', padding: 12, marginBottom: 10, borderRadius: 6 }}>
+    <li style={{ border: '1px solid var(--border)', padding: 12, marginBottom: 10, borderRadius: 6, background: 'var(--card)' }}>
       <h3 style={{ marginTop: 0 }}>{n.title}</h3>
       <p>{n.description || <em>No description</em>}</p>
-      <small>{new Date(n.createdAt).toLocaleString()}</small>
+      <small style={{ color: 'var(--muted)' }}>{new Date(n.createdAt).toLocaleString()}</small>
       <br />
       <button
         onClick={() => onDelete(n.id)}
-        style={{ marginTop: 8, color: 'red', fontSize: 14, padding: '8px 12px' }}
+        style={{ marginTop: 8, color: 'var(--danger)', fontSize: 14, padding: '8px 12px' }}
       >
         Delete
       </button>
@@ -170,6 +179,24 @@ function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const titleRef = useRef<HTMLInputElement>(null);
   const toastId = useRef(0);
+  const [theme, setTheme] = useState(initialTheme);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  // Saved only when the user clicks, so untouched visitors keep following the system setting.
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    try { localStorage.setItem('theme', next); } catch { /* not saved; still switches for this visit */ }
+  };
+
+  const themeButton = (
+    <button type="button" onClick={toggleTheme} style={{ padding: '6px 12px', marginRight: 8 }}>
+      {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+    </button>
+  );
 
   const showToast = (text: string) => {
     const id = ++toastId.current;
@@ -300,9 +327,12 @@ function App() {
 
   if (!authed) {
     return (
-      <div style={{ maxWidth: 480, margin: '40px auto', padding: 20, fontFamily: 'system-ui, sans-serif', color: '#333' }}>
+      <div style={{ maxWidth: 480, margin: '40px auto', padding: 20, fontFamily: 'system-ui, sans-serif', color: 'var(--text)' }}>
         <style>{globalCss}</style>
-        <h1 style={{ marginBottom: 16 }}>Notes</h1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h1 style={{ margin: 0 }}>Notes</h1>
+          {themeButton}
+        </div>
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           <button
@@ -311,9 +341,9 @@ function App() {
             style={{
               padding: '8px 16px',
               fontWeight: mode === 'signup' ? 700 : 400,
-              border: mode === 'signup' ? '2px solid #222' : '1px solid #ccc',
-              background: mode === 'signup' ? '#222' : '#fff',
-              color: mode === 'signup' ? '#fff' : '#222',
+              border: mode === 'signup' ? '2px solid var(--btn-active-bg)' : '1px solid var(--border)',
+              background: mode === 'signup' ? 'var(--btn-active-bg)' : 'var(--btn-bg)',
+              color: mode === 'signup' ? 'var(--btn-active-text)' : 'var(--text)',
               cursor: 'pointer'
             }}
           >
@@ -325,9 +355,9 @@ function App() {
             style={{
               padding: '8px 16px',
               fontWeight: mode === 'login' ? 700 : 400,
-              border: mode === 'login' ? '2px solid #222' : '1px solid #ccc',
-              background: mode === 'login' ? '#222' : '#fff',
-              color: mode === 'login' ? '#fff' : '#222',
+              border: mode === 'login' ? '2px solid var(--btn-active-bg)' : '1px solid var(--border)',
+              background: mode === 'login' ? 'var(--btn-active-bg)' : 'var(--btn-bg)',
+              color: mode === 'login' ? 'var(--btn-active-text)' : 'var(--text)',
               cursor: 'pointer'
             }}
           >
@@ -372,18 +402,18 @@ function App() {
           </button>
         </form>
 
-        {authMessage && <div style={{ color: '#0a6', marginTop: 12 }}>{authMessage}</div>}
-        {error && <div style={{ color: '#b00020', marginTop: 12 }}>{error}</div>}
+        {authMessage && <div style={{ color: 'var(--success)', marginTop: 12 }}>{authMessage}</div>}
+        {error && <div style={{ color: 'var(--danger)', marginTop: 12 }}>{error}</div>}
       </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: 20, fontFamily: 'system-ui, sans-serif', color: '#333' }}>
+    <div style={{ maxWidth: 800, margin: '0 auto', padding: 20, fontFamily: 'system-ui, sans-serif', color: 'var(--text)' }}>
       <style>{globalCss}</style>
 
       {!online && (
-        <div role="status" style={{ background: '#fff3cd', border: '1px solid #e0b400', padding: 10, borderRadius: 6, marginBottom: 12 }}>
+        <div role="status" style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', padding: 10, borderRadius: 6, marginBottom: 12 }}>
           You're offline. Changes will fail until you reconnect.
         </div>
       )}
@@ -392,11 +422,12 @@ function App() {
         <h1 style={{ margin: 0 }}>Your notes</h1>
         <div>
           <span style={{ marginRight: 12 }}>{email}</span>
+          {themeButton}
           <button onClick={handleLogout} style={{ padding: '6px 12px' }}>Log out</button>
         </div>
       </div>
 
-      <div style={{ background: '#f4f4f4', padding: 12, borderRadius: 6, margin: '16px 0', fontSize: 14, lineHeight: 1.5 }}>
+      <div style={{ background: 'var(--panel)', padding: 12, borderRadius: 6, margin: '16px 0', fontSize: 14, lineHeight: 1.5 }}>
         <div><strong>Who:</strong> {email} — the API reads this from the JWT, not from a field you type on each note.</div>
         <div style={{ marginTop: 6, wordBreak: 'break-all' }}>
           <strong>Token sent on every notes request:</strong> {token ? shortenToken(token) : '(none)'}
@@ -417,12 +448,12 @@ function App() {
         onAuthLost={() => setAuthed(false)}
       />
 
-      {error && <div style={{ color: '#b00020', marginBottom: 10 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--danger)', marginBottom: 10 }}>{error}</div>}
 
       {loading && skeleton ? (
         <div aria-label="Loading notes">
           {[0, 1, 2].map(i => (
-            <div key={i} style={{ border: '1px solid #ccc', padding: 12, marginBottom: 10, borderRadius: 6 }}>
+            <div key={i} style={{ border: '1px solid var(--border)', padding: 12, marginBottom: 10, borderRadius: 6 }}>
               <div className="skeleton" style={{ height: 18, width: '40%', marginBottom: 10 }} />
               <div className="skeleton" style={{ height: 12, width: '90%', marginBottom: 6 }} />
               <div className="skeleton" style={{ height: 12, width: '70%' }} />
@@ -430,15 +461,15 @@ function App() {
           ))}
         </div>
       ) : loadError ? (
-        <div style={{ border: '1px solid #f5c2c7', background: '#fff5f5', padding: 16, borderRadius: 6, marginBottom: 10 }}>
+        <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', padding: 16, borderRadius: 6, marginBottom: 10 }}>
           <strong>Couldn't load your notes</strong>
           <p style={{ margin: '6px 0 12px' }}>{loadError}</p>
           <button onClick={() => loadNotes(page)} style={{ padding: '6px 12px' }}>Retry</button>
         </div>
       ) : notes.length === 0 ? (
-        <div style={{ border: '1px dashed #aaa', padding: 24, borderRadius: 6, textAlign: 'center' }}>
+        <div style={{ border: '1px dashed var(--border-strong)', padding: 24, borderRadius: 6, textAlign: 'center' }}>
           <h3 style={{ marginTop: 0 }}>No notes yet</h3>
-          <p style={{ color: '#555' }}>Create your first note to get started.</p>
+          <p style={{ color: 'var(--muted)' }}>Create your first note to get started.</p>
           <button onClick={() => titleRef.current?.focus()} style={{ padding: '8px 16px' }}>
             Create your first note
           </button>
@@ -461,10 +492,10 @@ function App() {
             aria-modal="true"
             aria-labelledby="delete-title"
             onClick={e => e.stopPropagation()}
-            style={{ background: '#fff', padding: 20, borderRadius: 8, maxWidth: 360, width: '100%' }}
+            style={{ background: 'var(--surface)', padding: 20, borderRadius: 8, maxWidth: 360, width: '100%' }}
           >
             <h2 id="delete-title" style={{ marginTop: 0, fontSize: 20 }}>Delete this note?</h2>
-            <p style={{ color: '#444' }}>This can't be undone.</p>
+            <p style={{ color: 'var(--muted)' }}>This can't be undone.</p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button autoFocus onClick={() => setPendingDelete(null)} style={{ padding: '8px 12px' }}>Cancel</button>
               <button onClick={confirmDelete} style={{ padding: '8px 12px', background: '#c62828', color: '#fff', border: 'none', borderRadius: 4 }}>Delete</button>
@@ -475,7 +506,7 @@ function App() {
 
       <div aria-live="polite" style={{ position: 'fixed', right: 16, bottom: 16, display: 'flex', flexDirection: 'column', gap: 8, zIndex: 1100 }}>
         {toasts.map(t => (
-          <div key={t.id} style={{ background: '#222', color: '#fff', padding: '10px 14px', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
+          <div key={t.id} style={{ background: 'var(--toast-bg)', color: 'var(--toast-text)', padding: '10px 14px', borderRadius: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
             {t.text}
           </div>
         ))}
